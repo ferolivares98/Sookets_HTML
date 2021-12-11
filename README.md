@@ -1,2 +1,2 @@
-# Sookets_HTML
+# Sockets_HTML
 Práctica de sockets
