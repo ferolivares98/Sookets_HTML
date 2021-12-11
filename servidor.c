@@ -1,7 +1,7 @@
 /*
 
 ** Fichero: servidor.c
-** Autores: 
+** Autores:
 ** Fernando Olivares Naranjo DNI 54126671N
 ** Diego Sánchez Martín DNI 54126671N
 */
@@ -20,9 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 
-
-
-#define PUERTO 26671
+#define PUERTO 5121
 #define ADDRNOTFOUND	0xffffffff	/*Dirección de retorno de host no encontrado.*/
 #define BUFFERSIZE	1024	/*Tamaño máximo de los paquetes recibidos.*/
 #define TAM_BUFFER 10
@@ -246,7 +244,7 @@ void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
                 exit(1);
             }
             memset(&nuevoClientaddr_in, 0, sizeof(struct sockaddr_in));
-            
+
             if(bind(s_nc_UDP, (struct sockaddr *)&nuevoClientaddr_in, sizeof(struct sockaddr_in) == -1)){
                 printf("Unable to bind address nc UDP\n");
                 exit(1);
