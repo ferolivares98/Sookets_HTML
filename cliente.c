@@ -1,5 +1,4 @@
 /*
-
 ** Fichero: cliente.c
 ** Autores:
 ** Fernando Olivares Naranjo DNI 54126671N
@@ -23,8 +22,8 @@
 extern int errno;
 
 //Macros comunes
-#define PUERTO 5121
-#define TAMANOBUFFER 1024
+#define PUERTO 6121
+#define BUFFERSIZE 1024
 //Macros del UDP
 #define TIMEOUT 6
 #define MAXHOST 512
@@ -44,8 +43,8 @@ int main(int argc, char *argv[])
     struct sockaddr_in myaddr_in;	/* Para la dirección local del socket */
     struct sockaddr_in servaddr_in;	/* Para iniciar los datos del servidor al que nos conectaremos */
 	  int addrlen, i, j, errcode;
-    /* This example uses TAMANOBUFFER byte messages. */
-	  char buffer[TAMANOBUFFER];
+    /* This example uses BUFFERSIZE byte messages. */
+	  char buffer[BUFFERSIZE];
     FILE *ficheroDeOrdenes;
     char crlf[] = "\r\n";
 
@@ -159,9 +158,10 @@ int main(int argc, char *argv[])
     char k[10];
     char *linea; //Cada línea del fichero de órdenes
     int contador; //Contador para ir separando las líneas en la variable anterior
-    char peticionCliente[TAMANOBUFFER];
+    char peticionCliente[BUFFERSIZE];
+    char respuestaServidor[BUFFERSIZE];
 
-    while(fgets(buffer, TAMANOBUFFER, ficheroDeOrdenes) != NULL)
+    while(fgets(buffer, BUFFERSIZE, ficheroDeOrdenes) != NULL)
     {
       strcpy(orden, "");
       strcpy(fichero, "");
@@ -243,38 +243,28 @@ int main(int argc, char *argv[])
     * su parte.
     */
 
-  	while (i = recv(s, buffer, TAMANOBUFFER, 0)) {
-  		if (i == -1) {
-              perror(argv[0]);
+  		if (recv(s, respuestaServidor, BUFFERSIZE, 0) == -1) {
+        perror(argv[0]);
   			fprintf(stderr, "%s: error reading result\n", argv[0]);
   			exit(1);
   		}
   			/* The reason this while loop exists is that there
   			 * is a remote possibility of the above recv returning
-  			 * less than TAMANOBUFFER bytes.  This is because a recv returns
+  			 * less than BUFFERSIZE bytes.  This is because a recv returns
   			 * as soon as there is some data, and will not wait for
-  			 * all of the requested data to arrive.  Since TAMANOBUFFER bytes
+  			 * all of the requested data to arrive.  Since BUFFERSIZE bytes
   			 * is relatively small compared to the allowed TCP
   			 * packet sizes, a partial receive is unlikely.  If
   			 * this example had used 2048 bytes requests instead,
   			 * a partial receive would be far more likely.
-  			 * This loop will keep receiving until all TAMANOBUFFER bytes
+  			 * This loop will keep receiving until all BUFFERSIZE bytes
   			 * have been received, thus guaranteeing that the
   			 * next recv at the top of the loop will start at
   			 * the begining of the next reply.
   			 */
-  		while (i < TAMANOBUFFER) {
-  			j = recv(s, &buffer[i], TAMANOBUFFER-i, 0);
-  			if (j == -1) {
-                       perror(argv[0]);
-  			         fprintf(stderr, "%s: error reading result\n", argv[0]);
-  			         exit(1);
-                 }
-  			i += j;
-  		}
-  			/* Print out message indicating the identity of this reply. */
-  		printf("Received result number %d\n", *buffer);
-  	}
+
+  		printf("%s\n", respuestaServidor);
+
 
       /* Print message indicating completion of task. */
   	time(&timevar);
@@ -284,7 +274,7 @@ int main(int argc, char *argv[])
   } else {
 
     //Aquí empieza el cliente de UDP
-    
+
     /* Create the socket. */
       s = socket (AF_INET, SOCK_DGRAM, 0);
       if (s == -1) {
@@ -366,6 +356,8 @@ int main(int argc, char *argv[])
 
       while (n_retry > 0) {
         /* Send the request to the nameserver. */
+            char orden[100];
+            strcpy(orden, "GET /index.html HTTP/1.1\r\nHost: localhost\r\n\r\n");
             if (sendto (s, argv[2], strlen(argv[2]), 0, (struct sockaddr *)&servaddr_in,
             sizeof(struct sockaddr_in)) == -1) {
                 perror(argv[0]);

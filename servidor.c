@@ -22,13 +22,13 @@
 
 #include "utils.h"
 
-#define PUERTO 5121
+#define PUERTO 6121
 #define ADDRNOTFOUND	0xffffffff	/*Dirección de retorno de host no encontrado.*/
 #define BUFFERSIZE 1024
 #define MAXHOST 128
 
 void serverTCP(int s, struct sockaddr_in peeraddr_in);
-void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in);
+void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in, char *);
 void errout(char *);
 
 int FIN = 0;
@@ -39,6 +39,7 @@ int main(int argc, char *argv[]){
 
     int s_TCP, s_UDP;   /*Descriptor de socket conectado*/
     int ls_TCP;         /*Descriptor del listen socket (TCP)*/
+    int s_nc_UDP;       /*Descriptor para nuevo cliente*/
 
     int cc;
 
@@ -46,12 +47,14 @@ int main(int argc, char *argv[]){
 
     struct sockaddr_in myaddr_in;
     struct sockaddr_in clientaddr_in;
-    int addrlen;
+    struct sockaddr_in nuevoClientaddr_in;
+    socklen_t addrlen;  /*Unsigned int.*/
 
     fd_set readmask;
     int numfds, s_mayor;
 
     char buffer[BUFFERSIZE];
+    char hostname[100];
 
     struct sigaction vec;
 
@@ -94,7 +97,7 @@ int main(int argc, char *argv[]){
     s_UDP = socket(AF_INET, SOCK_DGRAM, 0);
     if(s_UDP == -1){
         perror(argv[0]);
-        printf("%s: unable to create socket UDP\n");
+        printf("%s: unable to create socket UDP\n", argv[0]);
         exit(1);
     }
     /*Bind (UDP) la dirección de listen con el socket.*/
@@ -121,8 +124,8 @@ int main(int argc, char *argv[]){
         case 0:
             /*Cierre de stdin y stdout, innecesarios de ahora en adelante.
             **El daemon no reportará errores.*/
-            fclose(stdin);
-            fclose(stderr);
+            //fclose(stdin);
+            //fclose(stderr);
 
             /*SIGCLD a SIG_IGN para prevenir la acumulación de zombies cuando
             los hijos terminen*. Evita llamadas a wait.*/
@@ -185,16 +188,50 @@ int main(int argc, char *argv[]){
                     if(FD_ISSET(s_UDP, &readmask)){
                         /*Se bloqueará hasta que llegue una nueva petición. Devolverá la dirección del cliente y
                         **un buffer con la petición. El último caracter del buffer será null.*/
-                       cc = recvfrom(s_UDP, buffer, BUFFERSIZE - 1, 0, (struct sockaddr *)&clientaddr_in, &addrlen);
-                       if(cc == -1){
-                           perror(argv[0]);
-                           printf("%s: recvfrom error\n", argv[0]);
-                           exit(1);
-                       }
-
-                       /*Asegurar que el mensaje termina en NULL.*/
+                        cc = recvfrom(s_UDP, buffer, BUFFERSIZE-1, 0, (struct sockaddr *)&clientaddr_in, &addrlen);
+                        if(cc == -1){
+                            perror(argv[0]);
+                            printf("%s: recvfrom error\n", argv[0]);
+                            exit(1);
+                        }
                        buffer[cc] = '\0';
-                       serverUDP(s_UDP, buffer, clientaddr_in);
+
+                        switch(fork()){
+                            case -1:
+                                printf("unable to fork udp.");
+                                exit(1);
+
+                            case 0:
+                                memset(&nuevoClientaddr_in, 0, sizeof(struct sockaddr_in));
+                                addrlen = sizeof(struct sockaddr_in);
+                                nuevoClientaddr_in.sin_family = AF_INET;
+                                nuevoClientaddr_in.sin_port = 0;
+                                nuevoClientaddr_in.sin_addr.s_addr = INADDR_ANY;
+
+                                s_nc_UDP = socket(AF_INET, SOCK_DGRAM, 0);
+                                if(s_nc_UDP == -1){
+                                    printf("Unable to create nc socket UDP\n");
+                                    exit(1);
+                                }
+
+                                if(bind(s_nc_UDP, (struct sockaddr *)&nuevoClientaddr_in, sizeof(struct sockaddr_in)) == -1){
+                                    printf("%s: Unable to bind address nc UDP\n", argv[0]);
+                                    exit(1);
+                                }
+
+                                if(getsockname(s_nc_UDP, (struct sockaddr *)&nuevoClientaddr_in, &addrlen) == -1){
+                                    printf("Unable to read socket adress UDP\n");
+                                    exit(1);
+                                }
+
+                                getnameinfo((struct sockaddr *)&clientaddr_in, sizeof(clientaddr_in), hostname, MAXHOST,NULL,0,0);
+
+                                serverUDP(s_nc_UDP, buffer, clientaddr_in, hostname);
+                                exit(0);
+
+                            default:
+                                close(s_nc_UDP);
+                        }
                     }
                 }
             }  /*Fin del bucle infinito de atención a clientes*/
@@ -216,12 +253,23 @@ void serverTCP(int s, struct sockaddr_in clientaddr_in){
   char hostname[MAXHOST];		/* remote host's name string */
 
   int len, len1, status;
-    struct hostent *hp;		/* pointer to host info for remote host */
-    long timevar;			/* contains time returned by time() */
+  struct hostent *hp;		/* pointer to host info for remote host */
+  long timevar;			/* contains time returned by time() */
 
-    struct linger linger;		/* allow a lingering, graceful close; */
+  struct linger linger;		/* allow a lingering, graceful close; */
                         /* used when setting SO_LINGER */
-
+  char crlf[] = "\r\n";
+  char bufAux1[75];
+  char respuestaServidor[BUFFERSIZE];
+  char cabeceraCliente[3][200];
+  char cabeceraRespuestaServidor[4][200];
+  char cadenaConexion[3][30];
+  int numLinea = 0;
+  char *cadenaSeparador, *cadenaAux1;
+  char pathWWW[20] = "www";
+  FILE *ficheroWeb;
+  int devolver404 = 0;
+  char bufferLector[BUFFERSIZE];
   /* Look up the host information for the remote host
    * that we have connected with.  Its internet address
    * was returned by the accept call, in the main
@@ -271,23 +319,215 @@ void serverTCP(int s, struct sockaddr_in clientaddr_in){
      * how the server will know that no more requests will
      * follow, and the loop will be exited.
      */
-  while (len = recv(s, buf, BUFFERSIZE, 0)) {
-    if (len == -1) errout(hostname); /* error from recv */
-      /* The reason this while loop exists is that there
-       * is a remote possibility of the above recv returning
-       * less than BUFFERSIZE bytes.  This is because a recv returns
-       * as soon as there is some data, and will not wait for
-       * all of the requested data to arrive.  Since BUFFERSIZE bytes
-       * is relatively small compared to the allowed TCP
-       * packet sizes, a partial receive is unlikely.  If
-       * this example had used 2048 bytes requests instead,
-       * a partial receive would be far more likely.
-       * This loop will keep receiving until all BUFFERSIZE bytes
-       * have been received, thus guaranteeing that the
-       * next recv at the top of the loop will start at
-       * the begining of the next request.
-       */
-    printf("%s ", buf);
+    printf("Estamos aquí 1");
+
+    while(len = recv(s, buf, BUFFERSIZE, 0)) {
+      if (len == -1) errout(hostname);/* error from recv */
+        /* The reason this while loop exists is that there
+         * is a remote possibility of the above recv returning
+         * less than BUFFERSIZE bytes.  This is because a recv returns
+         * as soon as there is some data, and will not wait for
+         * all of the requested data to arrive.  Since BUFFERSIZE bytes
+         * is relatively small compared to the allowed TCP
+         * packet sizes, a partial receive is unlikely.  If
+         * this example had used 2048 bytes requests instead,
+         * a partial receive would be far more likely.
+         * This loop will keep receiving until all BUFFERSIZE bytes
+         * have been received, thus guaranteeing that the
+         * next recv at the top of the loop will start at
+         * the begining of the next request.
+         */
+        printf("Estamos aquí 1");
+
+        strcpy(bufAux1, "");
+
+        cadenaSeparador = strtok(buf, crlf);
+        while(cadenaSeparador != NULL){
+            strcpy(cabeceraCliente[numLinea], cadenaSeparador);
+            cadenaSeparador = strtok(NULL, crlf);
+            numLinea++;
+        }
+
+        numLinea = 0;
+        cadenaAux1 = strtok(cabeceraCliente[numLinea], " ");
+        while(cadenaAux1 != NULL){
+            strcpy(cadenaSeparador[numLinea], cadenaAux1);
+            cadenaAux1 = strtok(NULL, " ");
+            numLinea++;
+        }
+
+        numLinea = 0;
+        cadenaAux1 = strtok(cabeceraCliente[2], " ");
+        while(cadenaAux1 != NULL){
+            strcpy(cadenaConexion[numLinea], cadenaAux1);
+            cadenaAux1 = strtok(NULL, " ");
+            numLinea++;
+        }
+
+        /*Comenzamos con la respuesta del servidor, montando el mensaje desde el comienzo con HTTP.*/
+        strcpy(respuestaServidor, "");
+        strcpy(respuestaServidor, "HTTP/1.1 ");
+
+        if(strcmp(cabeceraCliente[0], "GET") != 0){
+            /*Error 501*/
+            strcat(respuestaServidor, "501 Not Implemented");
+            strcat(respuestaServidor, crlf);
+
+            strcat(respuestaServidor, "Server: ");
+            strcat(respuestaServidor, hostname);
+            strcat(respuestaServidor, crlf);
+
+            /*Conexión viva o cerrada según la tercera línea del cliente.*/
+            if(strcmp(cadenaConexion[1], "keep-alive") == 0){
+                strcat(respuestaServidor, "Connection: ");
+                strcat(respuestaServidor, "keep-alive");
+                strcat(respuestaServidor, crlf);
+
+                strcat(respuestaServidor, crlf);
+                strcat(respuestaServidor, "<html><body><h1>501 Not Implemented</h1></body></html>\n");
+
+                //sleep(2)
+                printf("Estamos aquí 1");
+                if(send(s, respuestaServidor, BUFFERSIZE, 0) != BUFFERSIZE){
+                    logPeticiones(clientaddr_in, "TCP", "Error en el send del servidor TCP: 501 Not Implemented"); //Error en el envío.
+                    fprintf(stderr, "Error en el send del servidor TCP: 501 Not Implemented");
+                }
+
+                logPeticiones(clientaddr_in, "TCP", "Fin de conexión con mensaje enviado correctamente."); //Mensaje de constancia de 501 devuelto.
+            }else{
+                strcat(respuestaServidor, "Connection: ");
+                strcat(respuestaServidor, "close");
+                strcat(respuestaServidor, crlf);
+
+                strcat(respuestaServidor, crlf);
+                strcat(respuestaServidor, "<html><body><h1>501 Not Implemented</h1></body></html>\n");
+
+                //sleep(2)
+                printf("Estamos aquí 2");
+                if(send(s, respuestaServidor, BUFFERSIZE, 0) != BUFFERSIZE){
+                    logPeticiones(clientaddr_in, "TCP", "Error en el send del servidor TCP: 501 Not Implemented"); //Error en el envío.
+                    fprintf(stderr, "Error en el send del servidor TCP: 501 Not Implemented");
+                }
+
+                logPeticiones(clientaddr_in, "TCP", "501 Not Implemented devuelto.");
+
+                close(s);
+                logPeticiones(clientaddr_in, "TCP", "Fin de conexión con mensaje enviado correctamente."); //Mensaje de constancia de 501 devuelto.
+                break; /*Salida del bucle infinito*/
+            }
+        }else{
+            strcat(pathWWW, cabeceraCliente[1]);
+
+            if((ficheroWeb = (fopen(pathWWW, "r")) == NULL)){
+                devolver404 = 0;
+            }else{
+                devolver404 = 1;
+            }
+
+            if(!devolver404){
+                /*No se encuentra el fichero especificado, 404.*/
+                strcat(respuestaServidor, "404 Not found");
+                strcat(respuestaServidor, crlf);
+
+                strcat(respuestaServidor, "Server: ");
+                strcat(respuestaServidor, hostname);
+                strcat(respuestaServidor, crlf);
+
+                /*Conexión viva o cerrada según la tercera línea del cliente.*/
+                if(strcmp(cadenaConexion[1], "keep-alive") == 0){
+                    strcat(respuestaServidor, "Connection: ");
+                    strcat(respuestaServidor, "keep-alive");
+                    strcat(respuestaServidor, crlf);
+
+                    strcat(respuestaServidor, crlf);
+                    strcat(respuestaServidor, "<html><body><h1>404 Not found</h1></body></html>\n");
+
+                    //sleep(2)
+                    printf("Estamos aquí 3");
+                    if(send(s, respuestaServidor, BUFFERSIZE, 0) != BUFFERSIZE){
+                        logPeticiones(clientaddr_in, "TCP", "Error en el send del servidor TCP: 404 Not Implemented"); //Error en el envío.
+                        fprintf(stderr, "Error en el send del servidor TCP: 404 Not Found");
+                    }
+
+                    logPeticiones(clientaddr_in, "TCP", "404 devuelto.");
+                }else{
+                    strcat(respuestaServidor, "Connection: ");
+                    strcat(respuestaServidor, "close");
+                    strcat(respuestaServidor, crlf);
+
+                    strcat(respuestaServidor, crlf);
+                    strcat(respuestaServidor, "<html><body><h1>404 Not found</h1></body></html>\n");
+
+                    //sleep(2)
+                    printf("Estamos aquí 4");
+                    if(send(s, respuestaServidor, BUFFERSIZE, 0) != BUFFERSIZE){
+                        logPeticiones(clientaddr_in, "TCP", "Error en el send del servidor TCP: 404 Not Implemented"); //Error en el envío.
+                        fprintf(stderr, "Error en el send del servidor TCP: 404 Not Found");
+                    }
+
+                    logPeticiones(clientaddr_in, "TCP", "404 devuelto.");
+
+                    close(s);
+                    logPeticiones(clientaddr_in, "TCP", "Fin de conexión con mensaje enviado correctamente."); //Mensaje de constancia de 501 devuelto.
+                    break; /*Salida del bucle infinito*/
+                }
+            }else{
+                /*El único correcto, 200.*/
+                strcat(respuestaServidor, "200 OK");
+                strcat(respuestaServidor, crlf);
+
+                strcat(respuestaServidor, "Server: ");
+                strcat(respuestaServidor, hostname);
+                strcat(respuestaServidor, crlf);
+
+                if(strcmp(cadenaConexion[1], "keep-alive") == 0){
+                    strcat(respuestaServidor, "Connection: ");
+                    strcat(respuestaServidor, "keep-alive");
+                    strcat(respuestaServidor, crlf);
+
+                    strcat(respuestaServidor, crlf);
+
+                    while(fgets(bufferLector, BUFFERSIZE, ficheroWeb) != NULL){
+                        strcat(respuestaServidor, bufferLector);
+                    }
+                    fclose(ficheroWeb);
+
+                    //sleep(2)
+                    printf("Estamos aquí 5");
+                    if(send(s, respuestaServidor, BUFFERSIZE, 0) != BUFFERSIZE){
+                        logPeticiones(clientaddr_in, "TCP", "Error en el send del servidor TCP: 200 OK"); //Error en el envío.
+                        fprintf(stderr, "Error en el send del servidor TCP: 200 OK");
+                    }
+
+                    logPeticiones(clientaddr_in, "TCP", "200 devuelto.");
+                }else{
+                    strcat(respuestaServidor, "Connection: ");
+                    strcat(respuestaServidor, "close");
+                    strcat(respuestaServidor, crlf);
+
+                    strcat(respuestaServidor, crlf);
+
+                    while(fgets(bufferLector, BUFFERSIZE, ficheroWeb) != NULL){
+                        strcat(respuestaServidor, bufferLector);
+                    }
+                    fclose(ficheroWeb);
+
+                    //sleep(2)
+                    printf("Estamos aquí 6");
+                    if(send(s, respuestaServidor, BUFFERSIZE, 0) != BUFFERSIZE){
+                        logPeticiones(clientaddr_in, "TCP", "Error en el send del servidor TCP: 200 OK"); //Error en el envío.
+                        fprintf(stderr, "Error en el send del servidor TCP: 404 Not Found");
+                    }
+
+                    logPeticiones(clientaddr_in, "TCP", "200 devuelto.");
+
+                    close(s);
+                    logPeticiones(clientaddr_in, "TCP", "Fin de conexión con mensaje enviado correctamente."); //Mensaje de constancia de 501 devuelto.
+                    break; /*Salida del bucle infinito*/
+                }
+            }
+        }
+
     }
 
 
@@ -305,7 +545,7 @@ void serverTCP(int s, struct sockaddr_in clientaddr_in){
 
 
       /* Send a response back to the client. */
-    if (send(s, buf, BUFFERSIZE, 0) != BUFFERSIZE) errout(hostname);
+    //if (send(s, buf, BUFFERSIZE, 0) != BUFFERSIZE) errout(hostname);
 
 
     /* The loop has terminated, because there are no
@@ -340,14 +580,11 @@ void errout(char *hostname){
 }
 
 
-void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
+void serverUDP(int s_nc_UDP, char * buffer, struct sockaddr_in clientaddr_in, char * hostname){
     /*Nuevo socket para los clientes*/
     struct sockaddr_in nuevoClientaddr_in;
     socklen_t addrlen;  /*Unsigned int.*/
 
-    int s_nc_UDP;  /*Descriptor para nuevo cliente*/
-
-    char hostname[100];
     char bufferLector[BUFFERSIZE];
     char bufAux1[BUFFERSIZE];
 
@@ -366,43 +603,11 @@ void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
     FILE* ficheroWeb;
     int devolver404 = 0;
 
-    switch(fork()){
-        case -1:
-            printf("%s: unable to fork nc UDP\n");
-            exit(1);
-        case 0:
-            s_nc_UDP = socket(AF_INET, SOCK_DGRAM, 0);
-            if(s_nc_UDP == -1){
-                printf("Unable to create nc socket UDP\n");
-                exit(1);
-            }
-            
-            memset(&nuevoClientaddr_in, 0, sizeof(struct sockaddr_in));
-            nuevoClientaddr_in.sin_family = AF_INET;
-            nuevoClientaddr_in.sin_port = 0;
-            nuevoClientaddr_in.sin_addr.s_addr = INADDR_ANY;
+    
 
-            if(bind(s_nc_UDP, (struct sockaddr *)&nuevoClientaddr_in, sizeof(struct sockaddr_in) == -1)){
-                printf("Unable to bind address nc UDP\n");
-                exit(1);
-            }
-
-            if(getsockname(s_nc_UDP, (struct sockaddr *)&nuevoClientaddr_in, &addrlen) == -1){
-                printf("Unable to read socket adress UDP\n");
-                exit(1);
-            }
-
-            getnameinfo((struct sockaddr *)&clientaddr_in, sizeof(clientaddr_in), hostname, MAXHOST,NULL,0,0);
-            break;
-
-        default:
-            return;
-    }
-
-    close(s);
+    //close(s);
     sprintf(bufAux1, "Conexión en %s", hostname);
-    logPeticiones(clientaddr_in.sin_addr, clientaddr_in.sin_port, "UDP", bufAux1); //Mensaje de constancia de inicio de conexión.
-
+    logPeticiones(clientaddr_in, "UDP", bufAux1); //Mensaje de constancia de inicio de conexión.
 
 
     addrlen = sizeof(addrlen);
@@ -466,10 +671,10 @@ void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
                 //sleep(2)
 
                 if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
-                    logPeticiones(); //Error en el reenvío.
+                    //logPeticiones(); //Error en el reenvío.
                 }
 
-                logPeticiones(); //Mensaje de constancia de 501 devuelto.
+                //logPeticiones(); //Mensaje de constancia de 501 devuelto.
             }else{
                 strcat(respuestaServidor, "Connection: ");
                 strcat(respuestaServidor, "close");
@@ -481,13 +686,13 @@ void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
                 //sleep(2)
 
                 if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
-                    logPeticiones(); //Error en el envío.
+                    //logPeticiones(); //Error en el envío.
                 }
 
-                logPeticiones(); //Mensaje de constancia de 501 devuelto.
+                //logPeticiones(); //Mensaje de constancia de 501 devuelto.
 
                 close(s_nc_UDP);
-                logPeticiones(); //Fin de conexión.
+                //logPeticiones(); //Fin de conexión.
                 break; /*Salida del bucle infinito*/
             }
         }else{
@@ -520,10 +725,10 @@ void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
                     //sleep(2)
 
                     if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
-                        logPeticiones(); //Error en el reenvío.
+                        //logPeticiones(); //Error en el reenvío.
                     }
 
-                    logPeticiones(); //Mensaje de constancia de 404 devuelto.
+                    //logPeticiones(); //Mensaje de constancia de 404 devuelto.
                 }else{
                     strcat(respuestaServidor, "Connection: ");
                     strcat(respuestaServidor, "close");
@@ -535,13 +740,13 @@ void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
                     //sleep(2)
 
                     if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
-                        logPeticiones(); //Error en el envío.
+                        //logPeticiones(); //Error en el envío.
                     }
 
-                    logPeticiones(); //Mensaje de constancia de 404 devuelto.
+                    //logPeticiones(); //Mensaje de constancia de 404 devuelto.
 
                     close(s_nc_UDP);
-                    logPeticiones(); //Fin de conexión.
+                    //logPeticiones(); //Fin de conexión.
                     break; /*Salida del bucle infinito*/
                 }
             }else{
@@ -568,9 +773,9 @@ void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
                     //sleep(2)
 
                     if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
-                        logPeticiones(); //Error en el envío.
+                        //logPeticiones(); //Error en el envío.
                     }
-                    logPeticiones();
+                    //logPeticiones();
                 }else{
                     strcat(respuestaServidor, "Connection: ");
                     strcat(respuestaServidor, "close");
@@ -586,10 +791,10 @@ void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
                     //sleep(2)
 
                     if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
-                        logPeticiones(); //Error en el envío.
+                        //logPeticiones(); //Error en el envío.
                     }
                     close(s_nc_UDP);
-                    logPeticiones();
+                    //logPeticiones();
                     break;
                 }
             }
