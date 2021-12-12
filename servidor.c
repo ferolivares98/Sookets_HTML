@@ -20,10 +20,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "utils.h"
+
 #define PUERTO 5121
 #define ADDRNOTFOUND	0xffffffff	/*Dirección de retorno de host no encontrado.*/
 #define BUFFERSIZE	1024	/*Tamaño máximo de los paquetes recibidos.*/
-#define TAM_BUFFER 10
 #define MAXHOST 128
 
 void serverTCP(int s, struct sockaddr_in peeraddr_in);
@@ -32,7 +33,7 @@ void errout(char *);
 
 int FIN = 0;
 void finalizar(){ FIN =1; }
-
+void alarma(){ return; }
 
 int main(int argc, char * argv){
 
@@ -158,8 +159,7 @@ int main(int argc, char * argv){
                         close(s_UDP);
                         perror("\nFinalizando el servidor. Señal recibida en elect\n");
                     }
-                }
-                else{
+                }else{
                     /*Comprobar si el socket seleccionado es TCP*/
                     if(FD_ISSET(ls_TCP, &readmask)){
                         /*addrlen como puntero para que la llamada que acepta pueda devolver el tamaño de la
@@ -229,9 +229,24 @@ void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
 
     int s_nc_UDP;  /*Descriptor para nuevo cliente*/
 
+    char hostname[100];
+    char bufferLector[BUFFERSIZE];
+    char bufAux1[BUFFERSIZE];
 
+    struct addrinfo hints, *res;
+    struct sigaction alrm;
 
+    char respuestaServidor[BUFFERSIZE];
+    char *cadenaSeparador, *cadenaAux1;
+    char crlf[] = "\r\n";
+    char cabeceraCliente[3][200];
+    char cabeceraRespuestaServidor[4][200];
+    char cadenaConexion[3][30];
+    int numLinea = 0;
 
+    char pathWWW[] = "www";
+    FILE* ficheroWeb;
+    int devolver404 = 0;
 
     switch(fork()){
         case -1:
@@ -251,8 +266,217 @@ void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
             }
 
             if(getsockname(s_nc_UDP, (struct sockaddr *)&nuevoClientaddr_in, &addrlen) == -1){
-                printf("");
+                printf("Unable to read socket adress UDP\n");
+                exit(1);
             }
+
+            getnameinfo((struct sockaddr *)&clientaddr_in, sizeof(clientaddr_in), hostname, MAXHOST,NULL,0,0);
+            break;
+
+        default:
+            return;
     }
+
+    close(s);
+    sprintf(bufAux1, "Conexión en %s", hostname);
+    logPeticiones(clientaddr_in.sin_addr, clientaddr_in.sin_port, "UDP", bufAux1); //Mensaje de constancia de inicio de conexión.
+
+
+
+    addrlen = sizeof(addrlen);
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+
+    alrm.sa_handler = (void *) alarma;
+    alrm.sa_flags = 0;
+    if(sigaction(SIGALRM, &alarma, (struct sigaction *) 0) == -1){
+        fprintf(stderr, "Unable to register the SIGALRM signal\n");
+    }
+
+    while(1){
+        strcpy(bufAux1, "");
+
+        cadenaSeparador = strtok(buffer, crlf);
+        while(cadenaSeparador != NULL){
+            strcpy(cabeceraCliente[numLinea], cadenaSeparador);
+            cadenaSeparador = strtok(NULL, crlf);
+            numLinea++;
+        }
+
+        numLinea = 0;
+        cadenaAux1 = strtok(cabeceraCliente[numLinea], " ");
+        while(cadenaAux1 != NULL){
+            strcpy(cadenaSeparador[numLinea], cadenaAux1);
+            cadenaAux1 = strtok(NULL, " ");
+            numLinea++;
+        }
+
+        numLinea = 0;
+        cadenaAux1 = strtok(cabeceraCliente[2], " ");
+        while(cadenaAux1 != NULL){
+            strcpy(cadenaConexion[numLinea], cadenaAux1);
+            cadenaAux1 = strtok(NULL, " ");
+            numLinea++;
+        }
+
+        /*Comenzamos con la respuesta del servidor, montando el mensaje desde el comienzo con HTTP.*/
+        strcpy(respuestaServidor, "");
+        strcpy(respuestaServidor, "HTTP/1.1 ");
+
+        if(strcmp(cabeceraCliente[0], "GET") != 0){
+            /*Error 501*/
+            strcat(respuestaServidor, "501 Not Implemented");
+            strcat(respuestaServidor, crlf);
+
+            strcat(respuestaServidor, "Server: ");
+            strcat(respuestaServidor, hostname);
+            strcat(respuestaServidor, crlf);
+
+            /*Conexión viva o cerrada según la tercera línea del cliente.*/
+            if(strcmp(cadenaConexion[1], "keep-alive") == 0){
+                strcat(respuestaServidor, "Connection: ");
+                strcat(respuestaServidor, "keep-alive");
+                strcat(respuestaServidor, crlf);
+
+                strcat(respuestaServidor, crlf);
+                strcat(respuestaServidor, "<html><body><h1>501 Not Implemented</h1></body></html>\n");
+
+                //sleep(2)
+
+                if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
+                    logPeticiones(); //Error en el reenvío.
+                }
+
+                logPeticiones(); //Mensaje de constancia de 501 devuelto.
+            }else{
+                strcat(respuestaServidor, "Connection: ");
+                strcat(respuestaServidor, "close");
+                strcat(respuestaServidor, crlf);
+
+                strcat(respuestaServidor, crlf);
+                strcat(respuestaServidor, "<html><body><h1>501 Not Implemented</h1></body></html>\n");
+
+                //sleep(2)
+
+                if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
+                    logPeticiones(); //Error en el envío.
+                }
+
+                logPeticiones(); //Mensaje de constancia de 501 devuelto.
+
+                close(s_nc_UDP);
+                logPeticiones(); //Fin de conexión.
+                break; /*Salida del bucle infinito*/
+            }
+        }else{
+            strcat(pathWWW, cabeceraCliente[1]);
+
+            if((ficheroWeb = (fopen(pathWWW, "r")) == NULL)){
+                devolver404 = 0;
+            }else{
+                devolver404 = 1;
+            }
+
+            if(!devolver404){
+                /*No se encuentra el fichero especificado, 404.*/
+                strcat(respuestaServidor, "404 Not found");
+                strcat(respuestaServidor, crlf);
+
+                strcat(respuestaServidor, "Server: ");
+                strcat(respuestaServidor, hostname);
+                strcat(respuestaServidor, crlf);
+
+                /*Conexión viva o cerrada según la tercera línea del cliente.*/
+                if(strcmp(cadenaConexion[1], "keep-alive") == 0){
+                    strcat(respuestaServidor, "Connection: ");
+                    strcat(respuestaServidor, "keep-alive");
+                    strcat(respuestaServidor, crlf);
+
+                    strcat(respuestaServidor, crlf);
+                    strcat(respuestaServidor, "<html><body><h1>404 Not found</h1></body></html>\n");
+
+                    //sleep(2)
+
+                    if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
+                        logPeticiones(); //Error en el reenvío.
+                    }
+
+                    logPeticiones(); //Mensaje de constancia de 404 devuelto.
+                }else{
+                    strcat(respuestaServidor, "Connection: ");
+                    strcat(respuestaServidor, "close");
+                    strcat(respuestaServidor, crlf);
+
+                    strcat(respuestaServidor, crlf);
+                    strcat(respuestaServidor, "<html><body><h1>404 Not found</h1></body></html>\n");
+
+                    //sleep(2)
+
+                    if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
+                        logPeticiones(); //Error en el envío.
+                    }
+
+                    logPeticiones(); //Mensaje de constancia de 404 devuelto.
+
+                    close(s_nc_UDP);
+                    logPeticiones(); //Fin de conexión.
+                    break; /*Salida del bucle infinito*/
+                }
+            }else{
+                /*El único correcto, 200.*/
+                strcat(respuestaServidor, "200 OK");
+                strcat(respuestaServidor, crlf);
+
+                strcat(respuestaServidor, "Server: ");
+                strcat(respuestaServidor, hostname);
+                strcat(respuestaServidor, crlf);
+
+                if(strcmp(cadenaConexion[1], "keep-alive") == 0){
+                    strcat(respuestaServidor, "Connection: ");
+                    strcat(respuestaServidor, "keep-alive");
+                    strcat(respuestaServidor, crlf);
+
+                    strcat(respuestaServidor, crlf);
+
+                    while(fgets(bufferLector, BUFFERSIZE, ficheroWeb) != NULL){
+                        strcat(respuestaServidor, bufferLector);
+                    }
+                    fclose(ficheroWeb);
+
+                    //sleep(2)
+
+                    if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
+                        logPeticiones(); //Error en el envío.
+                    }
+                    logPeticiones();
+                }else{
+                    strcat(respuestaServidor, "Connection: ");
+                    strcat(respuestaServidor, "close");
+                    strcat(respuestaServidor, crlf);
+
+                    strcat(respuestaServidor, crlf);
+
+                    while(fgets(bufferLector, BUFFERSIZE, ficheroWeb) != NULL){
+                        strcat(respuestaServidor, bufferLector);
+                    }
+                    fclose(ficheroWeb);
+
+                    //sleep(2)
+
+                    if(sendto(s_nc_UDP, respuestaServidor, BUFFERSIZE, 0, (struct sockaddr*)&clientaddr_in, addrlen) != BUFFERSIZE){
+                        logPeticiones(); //Error en el envío.
+                    }
+                    close(s_nc_UDP);
+                    logPeticiones();
+                    break;
+                }
+            }
+        }
+
+    }
+
+
+    //IMPLEMENTAR EL CERRADO DE UDP.
+
 
 }
