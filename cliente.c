@@ -32,6 +32,7 @@ int main(int argc, char *argv[])
     /* This example uses TAMANOBUFFER byte messages. */
 	  char buffer[TAMANOBUFFER];
     FILE *ficheroDeOrdenes;
+    char crlf[] = "\r\n";
 
   /* Comprobación de parámetros introduccidos por el usuario */
 	if (argc != 4 || (strcmp(argv[2], "UDP") == 1 && strcmp(argv[2], "TCP") == 1))
@@ -47,7 +48,7 @@ int main(int argc, char *argv[])
 
   if ((ficheroDeOrdenes = (fopen(argv[3], "r"))) == NULL)
   {
-    fprintf(stderr, "Error al abrir el fichero de ordenes especificado", argv[4]);
+    fprintf(stderr, "Error al abrir el fichero de ordenes especificado %s", argv[4]);
     exit(1);
   }
 
@@ -85,7 +86,6 @@ int main(int argc, char *argv[])
 
     /* Numero de puerto del servidor en orden de red*/
 	   servaddr_in.sin_port = htons(PUERTO);
-
 		/* Intenta conectarse al servidor remoto a la direccion
      * que acaba de calcular en getaddrinfo, para ello le indicamos
      * el socket que acabamos de crear 's', la direccion del servidor remoto
@@ -112,7 +112,6 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "%s: unable to read socket address\n", argv[0]);
 		exit(1);
 	 }
-
 	/* Print out a startup message for the user. */
 	time(&timevar);
 	/* The port number must be converted first to host byte
@@ -130,20 +129,75 @@ int main(int argc, char *argv[])
 	/* Empezamos la parte de la práctica de 2021 HTTPS
   * leemos el fichero de ordenes hasta que la funcion
   * fgets() nos devuelva null */
-
-  char ordenCliente[3]; //Cada línea del fichero de ordenes separada en trozos
-  char opcion[10], html[50], opcionK[1]; //Cada uno de los trozos de cada línea del fichero de órdenes
+  char lineasOrdenes[3][150]; //Cada una de las líneas que haya en el fichero de ordenes que indiquemos en cliente
+  char orden[10];
+  char fichero[150];
+  char k[10];
   char *linea; //Cada línea del fichero de órdenes
-  int longitudLinea; //Para saber si la orden del fichero es correcta
+  int contador; //Contador para ir separando las líneas en la variable anterior
+  char peticionCliente[TAMANOBUFFER];
 
   while(fgets(buffer, TAMANOBUFFER, ficheroDeOrdenes) != NULL)
   {
-    //Con esto conseguimos separar cada línea del fichero de ordenes en la orden, el html y la k
-    linea = strtok(buffer, " ");
-      if(strlen(linea) > 3)
+    strcpy(orden, "");
+    strcpy(fichero, "");
+    strcpy(k, "");
+    /*for(i=0; i<3; i++){
+      lineasOrdenes[i]="";
+    }*/
+    //contador = 0;
+    linea = strtok(buffer, " "); //Obtenemos los tokens separándolos por el delimitador " "
+    while(linea != NULL) //Mientras haya tokens
+    {
+      strcpy(orden, linea); //Copiamos el token para tratarlo individualmente
+      linea = strtok(NULL, " ");
+      if(linea!=NULL)
       {
-        printf("Error\n");
+        strcpy(fichero, linea); //Copiamos el token para tratarlo individualmente
+        linea = strtok(NULL, " ");
       }
+      if(linea!=NULL)
+      {
+        strcpy(k, linea); //Copiamos el token para tratarlo individualmente
+        linea = strtok(NULL, " ");
+      }
+      /*if(!strcmp(k, ""))
+      {
+        linea = strtok(fichero, crlf);
+        strcpy(fichero, linea);
+      }*/
+      //contador = contador + 1;
+    }
+
+    //Primer trozo
+    strcpy(peticionCliente, orden);
+    strcat(peticionCliente, " ");
+    strcat(peticionCliente, fichero);
+    strcat(peticionCliente, " ");
+    strcat(peticionCliente, "HTML/1.1");
+    strcat(peticionCliente, crlf);
+
+    //Segundo trozo
+    strcat(peticionCliente, "Host: ");
+    strcat(peticionCliente, argv[1]);
+    strcat(peticionCliente, crlf);
+
+    //Tercer trozo
+    if(k[0]=='k')
+    {
+      strcat(peticionCliente, "Connection: ");
+      strcat(peticionCliente, "keep-alive");
+      strcat(peticionCliente, crlf);
+    }
+
+    //Final
+    strcat(peticionCliente, crlf);
+
+    if(send(s, peticionCliente, strlen(peticionCliente), 0) != strlen(peticionCliente))
+    {
+      fprintf(stderr, "%s: Error en la funcion send()",	argv[0]);
+			exit(1);
+    }
   }
 
   /* Despues de realizar la función send() llamamos a shutdown() y le
