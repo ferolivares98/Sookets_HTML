@@ -20,7 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "utils.h"
+//#include "utils.h"
 
 #define PUERTO 6121
 #define ADDRNOTFOUND	0xffffffff	/*Dirección de retorno de host no encontrado.*/
@@ -31,6 +31,11 @@ void serverTCP(int s, struct sockaddr_in peeraddr_in);
 void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in, char *);
 void errout(char *);
 
+
+void logPeticiones()
+{
+
+}
 int FIN = 0;
 void finalizar(){ FIN =1; }
 void alarma(){ return; }
@@ -600,7 +605,7 @@ void serverUDP(int s_nc_UDP, char * buffer, struct sockaddr_in clientaddr_in, ch
     int numLinea = 0;
 
     char pathWWW[] = "www";
-    FILE* ficheroWeb;
+    FILE *ficheroWeb;
     int devolver404 = 0;
 
     
