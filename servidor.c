@@ -376,7 +376,11 @@ void serverUDP(int s, char * buffer, struct sockaddr_in clientaddr_in){
                 printf("Unable to create nc socket UDP\n");
                 exit(1);
             }
+            
             memset(&nuevoClientaddr_in, 0, sizeof(struct sockaddr_in));
+            nuevoClientaddr_in.sin_family = AF_INET;
+            nuevoClientaddr_in.sin_port = 0;
+            nuevoClientaddr_in.sin_addr.s_addr = INADDR_ANY;
 
             if(bind(s_nc_UDP, (struct sockaddr *)&nuevoClientaddr_in, sizeof(struct sockaddr_in) == -1)){
                 printf("Unable to bind address nc UDP\n");
