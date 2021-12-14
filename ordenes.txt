@@ -1,4 +1,5 @@
-GET /index.html k
 GET /docencia.html k
-GET /ejemplo.html k
-DAME /index.htm 
+GET /facultad.html c
+DAME /index.html c
+GET /docencia.html k
+GET /index.html c

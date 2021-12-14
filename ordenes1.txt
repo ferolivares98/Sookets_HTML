@@ -1,1 +1,2 @@
-GET /index.html 
+DAME /index.html k
+GET /index.html c

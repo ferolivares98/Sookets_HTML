@@ -11,3 +11,6 @@ cliente: cliente.c utils.o utils.h
 
 utils.o: utils.c utils.h
 	${CC} -g -c utils.c
+
+clean:
+	rm *.o ${PROGS}
